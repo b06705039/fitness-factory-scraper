@@ -23,6 +23,5 @@ env/
 fitnessfactory_*.csv
 
 # SQLite 資料庫與暫存檔
-*.db
 *.db-shm
 *.db-wal
