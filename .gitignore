@@ -1,15 +1,23 @@
-# Mac 系統產生的隱藏檔
+# Mac 系統
 .DS_Store
 
-# Python 暫存與編譯檔
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
 
-# 虛擬環境 (如果你有使用的話，常見名稱為 venv 或 .env)
+# 虛擬環境
 venv/
 env/
 .venv/
 
-# 環境變數與機密資訊
+# 環境變數
 .env
+
+# 資料庫（本機資料，不進 repo；Cloud 環境啟動時自動重建）
+*.db
+*.sqlite
+*.sqlite3
+
+# 爬蟲產出的 CSV
+fitnessfactory_*.csv
