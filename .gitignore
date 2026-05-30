@@ -1,0 +1,15 @@
+# Mac 系統產生的隱藏檔
+.DS_Store
+
+# Python 暫存與編譯檔
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 虛擬環境 (如果你有使用的話，常見名稱為 venv 或 .env)
+venv/
+env/
+.venv/
+
+# 環境變數與機密資訊
+.env
