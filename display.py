@@ -4,7 +4,7 @@
 app.py — 健身工廠課表查詢介面
 ==============================
 執行方式：
-    streamlit run app.py
+    streamlit run display.py
 
 依賴：
     pip install streamlit pandas

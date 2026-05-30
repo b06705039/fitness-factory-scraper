@@ -110,73 +110,53 @@ def _build_headers(client: httpx.Client, store: str) -> dict:
 
 def get_all_stores(client: httpx.Client) -> list[dict]:
     """
-    呼叫 filterCourse API，從回傳 JSON 的 bkStoreList 欄位
-    解析所有廠區的 id（data-id）與 name。
-
-    bkStoreList HTML 結構範例：
-      <li class="bkStore" data-id="台北信義">台北信義</li>
-      <li class="bkStore" data-id="台北內湖">台北內湖</li>
-      ...
+    從主頁面 HTML 的 .bkLocationStore li 解析所有廠區。
+    data-id 為數字 ID，傳給 API 時使用 ID；name 為顯示用中文名稱。
     """
-    print("[步驟 1/3] 從 API 取得廠區清單...")
+    print("[步驟 1/3] 從主頁面取得廠區清單...")
 
     resp = client.get(
-        FILTER_COURSE,
-        params={"store": "台北信義"},   # 任意廠區觸發完整選單回傳
-        headers=_build_headers(client, "台北信義"),
+        STORE_PAGE,
+        headers={
+            "User-Agent":      UA,
+            "Accept-Language": "zh-TW,zh;q=0.9",
+        },
     )
     resp.raise_for_status()
-    data = resp.json()
-
-    # ── 解析 bkStoreList ──
-    store_html = data.get("bkStoreList", "")
-    soup = BeautifulSoup(store_html, "html.parser")
+    soup = BeautifulSoup(resp.text, "html.parser")
 
     stores: list[dict] = []
-    for li in soup.select("li[data-id]"):
-        val  = li.get("data-id", "").strip()
-        name = li.get_text(strip=True)
-        # 排除「所有廠區」或空值項目
-        if val and val not in ("0", "") and name not in ("0", "", "所有廠區", "全部廠區"):
-            stores.append({"id": val, "name": name})
+    for li in soup.select("li.bkLocationStore[data-id]"):
+        store_id   = li.get("data-id", "").strip()
+        store_name = li.get_text(strip=True).removesuffix("廠")
+        if store_id and store_name:
+            stores.append({"id": store_id, "name": store_name})
 
-    # 去重（保留順序）
-    seen: set[str] = set()
-    unique: list[dict] = []
-    for s in stores:
-        if s["id"] not in seen:
-            seen.add(s["id"])
-            unique.append(s)
-
-    if unique:
-        sample = [s["name"] for s in unique[:6]]
-        suffix = f"... 共 {len(unique)} 個" if len(unique) > 6 else f"共 {len(unique)} 個"
-        print(f"  → {suffix}：{sample}")
+    if stores:
+        print(f"  → 找到 {len(stores)} 個廠區")
     else:
-        # Fallback：若 bkStoreList 結構有變，使用硬編碼清單
-        print("  → bkStoreList 解析失敗，使用備用廠區清單")
-        unique = _fallback_stores()
+        print("  → 解析失敗，使用備用清單")
+        stores = _fallback_stores()
 
-    return unique
+    return stores
 
 
 def _fallback_stores() -> list[dict]:
-    """
-    備用廠區清單（當 API 解析失敗時使用）。
-    可依官網最新資訊自行更新。
-    """
     names = [
-        "台北信義", "台北內湖", "台北中山", "台北松山", "台北士林",
-        "台北南港", "台北文山", "台北北投", "台北萬華", "台北大安",
-        "新北板橋", "新北新莊", "新北三重", "新北中和", "新北永和",
-        "新北新店", "新北土城", "新北蘆洲", "新北汐止", "新北樹林",
-        "桃園中壢", "桃園桃園", "桃園平鎮", "桃園八德",
-        "新竹竹北", "新竹東區",
-        "台中北屯", "台中西屯", "台中南屯", "台中北區", "台中東區",
-        "台中豐原", "台中太平", "台中大里",
-        "台南東區", "台南北區", "台南永康",
-        "高雄三民", "高雄苓雅", "高雄鳳山", "高雄楠梓", "高雄左營",
-        "高雄仁武", "高雄岡山",
+        "基隆基隆", "台北信義", "台北健康", "台北長春", "台北中山北", "台北萬隆",
+        "新北汐止", "新北新埔", "新北三重", "新北中和", "新北淡水", "新北板橋",
+        "新北土城", "新北新莊", "新北林口", "新北汐科", "新北雙和",
+        "桃園大有", "桃園中壢", "桃園復興", "桃園南崁", "桃園青埔", "桃園正光",
+        "新竹湳雅", "新竹公道五", "新竹西大", "新竹光埔", "新竹新竹北",
+        "苗栗頭份",
+        "台中中清", "台中新時代", "台中精明", "台中豐原", "台中文心南",
+        "台中福科", "台中逢甲", "台中景賢", "台中沙鹿",
+        "彰化員林", "彰化金馬",
+        "嘉義嘉義",
+        "台南中華", "台南開元", "台南永華", "台南永康", "台南西門",
+        "高雄博愛", "高雄九如", "高雄鳳山", "高雄草衙", "高雄同盟",
+        "高雄楠梓", "高雄南岡山", "高雄光華", "高雄建國",
+        "屏東屏東", "屏東潮州",
     ]
     return [{"id": n, "name": n} for n in names]
 
@@ -343,7 +323,7 @@ def scrape_all(
         sid  = store["id"]
         print(f"  [{i:>2}/{len(stores)}] {name:<10} ...", end=" ", flush=True)
         try:
-            data    = fetch_schedule(client, sid, date)
+            data    = fetch_schedule(client, name, date)
             count   = data.get("count", "?")
             records = parse_schedule(data, name)
             if records:
