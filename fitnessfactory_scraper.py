@@ -225,10 +225,49 @@ def parse_schedule(json_data: dict, store_name: str) -> list[dict]:
 
     # ── 民國年 → 西元年 ──
     try:
-        ce_year = int(json_data.get("year", 0)) + 1911
+        raw_year = json_data.get("year", 0)
+        ce_year = int(raw_year) + 1911
     except (ValueError, TypeError):
         ce_year = None
+
+    # 防禦：若 API 沒給年份，退而求其次用今天的西元年（避免日期整批變空）
+    if not ce_year:
+        ce_year = datetime.now().year
+        print(f"  ⚠ year 欄位解析失敗（原始值：{json_data.get('year')!r}），改用系統年份 {ce_year}")
+
     month = str(json_data.get("month", ""))
+    if not month or month == "0":
+        month = str(datetime.now().month)
+        print(f"  ⚠ month 欄位解析失敗（原始值：{json_data.get('month')!r}），改用系統月份 {month}")
+
+    # API 在跨月週次時會回傳如 "6 - 7" 的格式，取「起始月」作為 running_month 的起點
+    start_month_str = month.split("-")[0].strip()
+    try:
+        start_month = int(start_month_str)
+    except ValueError:
+        start_month = datetime.now().month
+        print(f"  ⚠ month 欄位無法解析起始月（原始值：{month!r}），改用系統月份 {start_month}")
+
+    # 預先計算每欄的「修正後月份」，解決跨月（如 6/29~7/5）日期算錯的問題
+    # 邏輯：依序掃描 7 個日期，若某天的日期數字比前一天小，代表進入下個月
+    col_months: list = []
+    running_month = start_month
+    running_year  = ce_year
+    prev_day_num  = None
+    for dh in date_headers:
+        if dh["date"]:
+            try:
+                d = int(dh["date"])
+            except ValueError:
+                col_months.append((running_year, running_month))
+                continue
+            if prev_day_num is not None and d < prev_day_num:
+                running_month += 1
+                if running_month > 12:
+                    running_month = 1
+                    running_year = (running_year or 0) + 1
+            prev_day_num = d
+        col_months.append((running_year, running_month))
 
     # ── 課表本體 ──
     schedule_soup = BeautifulSoup(json_data.get("scheduleView", ""), "html.parser")
@@ -257,15 +296,17 @@ def parse_schedule(json_data: dict, store_name: str) -> list[dict]:
             is_sub     = raw_name.startswith(SUBSTITUTION_MARK)
             clean_name = raw_name.lstrip(SUBSTITUTION_MARK).strip()
 
-            # 日期對應
+            # 日期對應（已修正跨月：col_months 依序記錄每欄正確的年/月）
             col_date = col_week = ""
             if col_idx < len(date_headers):
                 dh = date_headers[col_idx]
                 col_week = dh["week"]
-                if dh["date"] and ce_year and month:
+                if dh["date"]:
                     try:
-                        col_date = f"{ce_year}/{int(month):02d}/{int(dh['date']):02d}"
-                    except ValueError:
+                        col_year, col_month = col_months[col_idx]
+                        if col_year and col_month:
+                            col_date = f"{col_year}/{col_month:02d}/{int(dh['date']):02d}"
+                    except (ValueError, IndexError, TypeError):
                         pass
 
             records.append({
@@ -354,7 +395,15 @@ def scrape_all(
     for col in df.select_dtypes(include="str").columns:
         df[col] = df[col].str.strip()
 
-    df = df.replace("", pd.NA).dropna(subset=["course_name"])
+    df = df.replace("", pd.NA)
+
+    # 最後防線：絕不讓 date 為空的記錄流入後續流程（DB 有 NOT NULL 限制）
+    missing_date = df["date"].isna().sum()
+    if missing_date:
+        print(f"  ⚠ 偵測到 {missing_date} 筆日期缺失，已過濾（不會寫入 DB）")
+        df = df.dropna(subset=["date"])
+
+    df = df.dropna(subset=["course_name"])
     df["is_substitution"] = df["is_substitution"].fillna(False).astype(bool)
     df = df.sort_values(["store", "date", "start_time"]).reset_index(drop=True)
 
@@ -395,12 +444,6 @@ if __name__ == "__main__":
     print(f"  代課筆數  : {int(df['is_substitution'].sum()) if not df.empty else 0}")
     print("=" * 65)
 
-    print("\n── 前 5 筆 ──")
-    print(df.head().to_string())
-
-    if not df.empty and df["is_substitution"].any():
-        print("\n── 代課課程（前 10 筆）──")
-        print(df[df["is_substitution"]].head(10).to_string())
 
     if not df.empty:
         out = f"fitnessfactory_{TODAY}.csv"
