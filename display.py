@@ -5,18 +5,29 @@ app.py — 健身工廠課表查詢介面
 ==============================
 執行方式：
     streamlit run display.py
+    py -m streamlit run display.py
 
 依賴：
     pip install streamlit pandas
 需要同目錄下有 gym_db.py
 """
 
+import hashlib
+import json
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+
+# 選填：瀏覽器 localStorage 元件（用於記住上次的篩選條件）
+#   pip install streamlit-local-storage
+try:
+    from streamlit_local_storage import LocalStorage
+    _HAS_LOCAL_STORAGE = True
+except ImportError:
+    _HAS_LOCAL_STORAGE = False
 
 # ════════════════════════════════════════════════════════════════
 #  頁面設定
@@ -74,6 +85,9 @@ footer { visibility: hidden; }
 # ════════════════════════════════════════════════════════════════
 
 DB_PATH = Path("gym_schedule.db")
+
+# localStorage 的鍵名（記住上次挑選的：廠區 / 課程名稱 / 老師）
+FILTER_STORAGE_KEY = "gym_schedule_filters_v1"
 
 TIME_SLOTS = {
     "全部":                   (None, None),
@@ -210,6 +224,51 @@ if df_all.empty:
     st.stop()
 
 # ════════════════════════════════════════════════════════════════
+#  讀取 localStorage 中上次挑選的篩選條件
+# ════════════════════════════════════════════════════════════════
+
+# localS：瀏覽器 localStorage 存取物件（不可用時為 None）
+localS = LocalStorage() if _HAS_LOCAL_STORAGE else None
+
+# saved_filters：上次挑選的條件 {"branches": [...], "courses": [...], "teachers": [...]}
+saved_raw = localS.getItem(FILTER_STORAGE_KEY) if localS is not None else None
+try:
+    saved_filters = json.loads(saved_raw) if saved_raw else {}
+    if not isinstance(saved_filters, dict):
+        saved_filters = {}
+except (json.JSONDecodeError, TypeError):
+    saved_filters = {}
+
+
+# 追蹤要記憶的三個篩選器：localStorage 欄位 → widget 的 session_state key
+FILTER_WIDGET_KEYS = {
+    "branches": "flt_branches",
+    "courses":  "flt_courses",
+    "teachers": "flt_teachers",
+}
+
+# 一次性：等 getItem 回傳後，把上次挑選的值灌進各 widget 的 session_state。
+# 只保留目前資料中仍存在的選項，避免 multiselect 因選項不存在而報錯。
+# 之後就由 widget 的 key 自行持有狀態，不再被 localStorage 的額外 rerun 重置。
+if (
+    localS is not None
+    and saved_raw is not None
+    and not st.session_state.get("_filters_loaded", False)
+):
+    _valid_options = {
+        "branches": set(df_all["branch_name"].unique()),
+        "courses":  set(df_all["course_name"].unique()),
+        "teachers": set(df_all["teacher_name"].unique()),
+    }
+    for _field, _wkey in FILTER_WIDGET_KEYS.items():
+        _vals = saved_filters.get(_field, [])
+        if isinstance(_vals, list):
+            st.session_state[_wkey] = [
+                v for v in _vals if v in _valid_options[_field]
+            ]
+    st.session_state["_filters_loaded"] = True
+
+# ════════════════════════════════════════════════════════════════
 #  側邊欄篩選器
 # ════════════════════════════════════════════════════════════════
 
@@ -220,8 +279,7 @@ with st.sidebar:
     st.markdown('<div class="sidebar-section">📍 廠區</div>', unsafe_allow_html=True)
     all_branches = sorted(df_all["branch_name"].unique().tolist())
     sel_branches = st.multiselect(
-        "選擇廠區", options=all_branches,
-        default=[all_branches[0]] if all_branches else [],
+        "選擇廠區", options=all_branches, key="flt_branches",
         placeholder="可多選廠區…", label_visibility="collapsed",
     )
 
@@ -237,8 +295,14 @@ with st.sidebar:
             except ValueError:
                 continue
     date_options = ["全部日期"] + (week_dates if week_dates else all_dates)
+    # 預設帶入「今天」；若今天無資料則退回「全部日期」
+    today_str = datetime.now().strftime("%Y/%m/%d")
+    default_date_index = (
+        date_options.index(today_str) if today_str in date_options else 0
+    )
     sel_date_option = st.selectbox(
-        "選擇日期", options=date_options, label_visibility="collapsed"
+        "選擇日期", options=date_options, index=default_date_index,
+        label_visibility="collapsed",
     )
     with st.expander("📆 或選擇精確日期"):
         custom_date = st.date_input("指定日期", value=None, label_visibility="collapsed")
@@ -251,7 +315,7 @@ with st.sidebar:
     st.markdown('<div class="sidebar-section">🏃 課程名稱</div>', unsafe_allow_html=True)
     all_courses = sorted(df_all["course_name"].unique().tolist())
     sel_courses = st.multiselect(
-        "選擇課程", options=all_courses,
+        "選擇課程", options=all_courses, key="flt_courses",
         placeholder="不選則顯示全部…", label_visibility="collapsed"
     )
 
@@ -261,9 +325,28 @@ with st.sidebar:
         key=lambda x: x.lower(),
     )
     sel_teachers = st.multiselect(
-        "選擇老師", options=all_teachers,
+        "選擇老師", options=all_teachers, key="flt_teachers",
         placeholder="不選則顯示全部…", label_visibility="collapsed"
     )
+
+    # ── 將本次挑選的（廠區 / 課程名稱 / 老師）寫回 localStorage ──
+    if localS is not None:
+        current_payload = json.dumps(
+            {
+                "branches": sel_branches,
+                "courses":  sel_courses,
+                "teachers": sel_teachers,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        # 僅在值有變動時才寫入，避免無限 rerun。
+        # 用「內容雜湊」當元件 key，確保每個不同的值都會實際寫進 localStorage。
+        if current_payload != saved_raw:
+            _sk = "_save_" + hashlib.md5(current_payload.encode("utf-8")).hexdigest()[:8]
+            localS.setItem(FILTER_STORAGE_KEY, current_payload, key=_sk)
+    else:
+        st.caption("💡 安裝 `streamlit-local-storage` 可記住上次的篩選條件")
 
     st.markdown('<div class="sidebar-section">🏢 教室</div>', unsafe_allow_html=True)
     all_rooms = sorted([r for r in df_all["room"].unique().tolist() if r])
