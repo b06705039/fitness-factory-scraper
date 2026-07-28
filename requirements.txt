@@ -1,0 +1,15 @@
+# 健身工廠課表專案依賴
+# 安裝：pip install -r requirements.txt
+
+# --- 資料處理 ---
+pandas>=2.0
+
+# --- 爬蟲（fitnessfactory_scraper.py / debug.py）---
+httpx>=0.27
+beautifulsoup4>=4.12
+
+# --- 查詢介面（display.py，streamlit run display.py）---
+streamlit>=1.30
+
+# 記住上次挑選的篩選條件（廠區 / 課程名稱 / 老師，存於瀏覽器 localStorage）
+streamlit-local-storage>=0.0.14
