@@ -21,6 +21,7 @@
   pip install httpx beautifulsoup4 pandas
 
 【使用方式】
+  source venv/bin/activate
   python fitnessfactory_scraper.py
 """
 
